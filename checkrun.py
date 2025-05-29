@@ -37,7 +37,7 @@ def check_run(path) -> tuple[int, int, int, int]:
                             ]):
                     complete += 1
                 elif any(re.search(pattern, simerr) for pattern in [
-                            "Program abort at tick",
+                            "Program aborted at tick",
                             "Failed to execute default signal handler!",
                             "gem5 has encountered a segmentation fault!",
                             "error: ambiguous option:",

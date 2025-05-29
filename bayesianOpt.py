@@ -39,7 +39,7 @@ def objective_function(**params):
 
     arch_list = [copy.deepcopy(ARCH_LIST[0])]
     arch_list[0].arch_name = f"config_{stamp}"
-    arch_list[0].script_params += script_params
+    arch_list[0].script_params = script_params
 
 
     # issue config to run

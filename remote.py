@@ -11,7 +11,7 @@ def check_load_and_run(server: str|None, cmd:str, exec:str, max_run_in_server:in
     try:
         ssh.connect(hostname=server)
         # 执行任务数量
-        _, stdout, _ = ssh.exec_command(f"pgrep -c {exec} -u $(whoami)")
+        _, stdout, _ = ssh.exec_command(f"pgrep -c -f {exec} -u $(whoami)")
         running_num = int(stdout.read().decode().strip())
 
         #检查负载
@@ -22,7 +22,7 @@ def check_load_and_run(server: str|None, cmd:str, exec:str, max_run_in_server:in
         _, stdout, _ = ssh.exec_command(f"nproc")
         cores = int(stdout.read().decode().strip())
 
-        if running_num > max_run_in_server or float(load) > cores/2:
+        if running_num >= max_run_in_server or load >= cores/2:
             ssh.close()
             return False
 

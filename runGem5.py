@@ -190,10 +190,12 @@ def monitor_run_progress(configs: list[str], base_dir: str, check_interval: int 
 
             # Update progress bar
             progress = progress_trackers[config_name]
-            finished_tasks = new_complete + new_error - \
-                progress["complete"] - progress["error"]
-            if finished_tasks > 0:
-                progress["tracker"].update(finished_tasks)
+            # finished_tasks = new_complete + new_error - \
+            #     progress["complete"] - progress["error"]
+            # if finished_tasks > 0:
+            #     progress["tracker"].update(finished_tasks)
+            progress["tracker"].n = new_complete + new_error
+            progress["tracker"].refresh()
 
             # Update stored values
             progress["complete"] = new_complete
