@@ -101,27 +101,34 @@ workloads:
 ```
 
 ### Note
-The checkpoint can be in any subdirectory under `workloads_path`, and the script will search for them recursively.
+The checkpoint file should be located under the 'workloads_path' directory in a subdirectory named workload.
 
-The checkpoint files should be named in the format `.*_\d+_\d\.\d+.zstd`, where:
-- The first part is not important (e.g., `foo`, `bar`, even empty).
-- The second part is an integer (e.g., `100000000`, `200000000`, etc.).
-- The third part is a float which is represent it's weight (e.g., `0.25`, `0.5`, etc.).
+The script traverses the workloads_path directory based on workload_list, looking for each subdirectory named workload, and recursively searching for a checkpoint file that matches the naming convention. Each workload can contain multiple checkpoints. The checkpoint files can be placed in any level of subdirectories, but they must be named in the following format: `<any>_<int>_<float>_.zstd`, where:
 
-The Tree of workloads should look like this:
+* `<any>` : any string, can be empty, like foo, bar, _, etc.
+
+* `<int>` : integer for a point in time or instruction count, e.g. 100000000, 200000000;
+
+* `<float>` : a floating point number representing the weight of the checkpoint, e.g. 0.08, 0.19;
+
+* The combination of `<int>_<float>` must be unique within the same `workload` and is used to uniquely identify a checkpoint.
+
+For different checkpoints of the same `workload`, the script will sort them from highest to lowest weight and add them to the column to be sequenced one by one until the sum of checkpoint weights of the `workload` is not less than `run_weight`.
+
+An example checkpoint directory structure is as follows:
 
 ```bash
 /nfs/home/$(whoami)/gem5_checkpoints
 ├── workload1
 │   ├── checkpoint1
-│   │   ├── foo_100000000_0.25.zstd
-│   ├── checkpoint2
-│   │   └── bar_200000000_0.5.zstd
-|   ...
+│   │   └── foo_100000000_0.08_.zstd
+│   ├── bar_200000000_0.19_.zstd
+│   │
+│   ...
 ├── workload2
 │   ├── checkpoint1
-│   │   └── baz_300000000_0.75.zstd
-|   ...
+│   │   └── _300000000_0.75_.zstd
+│   ...
 ...
 ```
 
