@@ -22,7 +22,7 @@ def check_load_and_run(server: str|None, cmd:str, exec:str, max_run_in_server:in
         _, stdout, _ = ssh.exec_command(f"nproc")
         cores = int(stdout.read().decode().strip())
 
-        if running_num >= max_run_in_server or load >= cores/2:
+        if running_num > max_run_in_server or load >= cores/2:
             ssh.close()
             return False
 
