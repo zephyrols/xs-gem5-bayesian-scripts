@@ -41,7 +41,7 @@ def run_cmd(env: config.EnvironmentConfig,
     workload_name = workload.workload_name
     cpt_path_list = workload.cpt_path_list
 
-    for cpt in tqdm(cpt_path_list, desc=f"Issuing {workload_name}", leave=False, unit="checkpoint"):
+    for cpt in tqdm(cpt_path_list, desc=f"Issuing {workload_name}", leave=False, unit="checkpoint", dynamic_ncols=True):
         # Extract identification information from checkpoint path
         inst_num = os.path.basename(cpt).split("_")[-3]
         weight = os.path.basename(cpt).split("_")[-2]
@@ -127,11 +127,11 @@ def issue_archs(env: config.EnvironmentConfig,
 
     issued_configs = []
 
-    for arch in tqdm(arch_list, desc="Issuing configurations", unit="config"):
+    for arch in tqdm(arch_list, desc="Issuing configurations", unit="config", dynamic_ncols=True):
         try:
             start_time = time.time()
             # Process each workload for the current configuration
-            for workload in tqdm(workload_list, desc=f"Issuing {arch.arch_name}", leave=False, unit="workload"):
+            for workload in tqdm(workload_list, desc=f"Issuing {arch.arch_name}", leave=False, unit="workload", dynamic_ncols=True):
                 run_cmd(env=env, run=run,
                         workload=workload,
                         arch=arch,
@@ -174,7 +174,8 @@ def monitor_run_progress(configs: list[str], base_dir: str, check_interval: int 
                 total=total,
                 initial=complete+error,
                 desc=f"Progress {config_name}",
-                unit="checkpoint"
+                unit="checkpoint",
+                dynamic_ncols=True,
             ),
             "complete": complete,
             "error": error,
