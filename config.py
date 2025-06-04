@@ -300,7 +300,7 @@ def load_yaml(config_file: str) -> tuple[EnvironmentConfig, RunningConfig, list[
             script_params=arch["script_params"] if "script_params" in arch else []
         )
         for arch in config["archs"]
-    ]
+    ] if "archs" in config else []
 
     server_list = config["servers"]
 
