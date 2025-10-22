@@ -36,16 +36,21 @@ def check_run(path) -> tuple[int, int, int, int]:
                                 "because m5_exit instruction encountered when simulating XS"
                             ]):
                     complete += 1
+                    if __name__ == "__main__":
+                        print(f"Success done in {root}")
+                    pass
                 elif any(re.search(pattern, simerr) for pattern in [
                             "Program aborted at tick",
                             "Failed to execute default signal handler!",
                             "gem5 has encountered a segmentation fault!",
                             "error: ambiguous option:",
+                            "AttributeError:"
                         ]):
                     error_list.append(root)
                     error += 1
                 else:
-                    # print(f"Unknown error in {root}")
+                    if __name__ == "__main__":
+                        print(f"Unknown Error or Running in {root}")
                     pass
             else:
                 error_list.append(root)

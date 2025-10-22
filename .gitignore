@@ -1,2 +1,4 @@
 output
 __pycache__
+bin/*
+data_analysis/*

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import argparse
 from datetime import timedelta
@@ -43,8 +44,8 @@ def run_cmd(env: config.EnvironmentConfig,
 
     for cpt in tqdm(cpt_path_list, desc=f"Issuing {workload_name}", leave=False, unit="checkpoint", dynamic_ncols=True):
         # Extract identification information from checkpoint path
-        inst_num = os.path.basename(cpt).split("_")[-3]
-        weight = os.path.basename(cpt).split("_")[-2]
+        matchs = re.findall(r'(\d+)_([0-9]*\.?[0-9]+)', os.path.basename(cpt))
+        inst_num, weight = matchs[0]
         
 
         # Set up output directory
@@ -54,8 +55,8 @@ def run_cmd(env: config.EnvironmentConfig,
 
         # Skip if output directory exists and simulation is complete
         if resume and checkrun.check_run(cpt_output_dir)[0] == 1:
-            tqdm.write(
-                f"Skip {cpt_output_dir} because reached max instruction count or m5_exit")
+            # tqdm.write(
+            #     f"Skip {cpt_output_dir} because reached max instruction count or m5_exit")
             continue
 
         # Build the command in sections for better readability
@@ -93,10 +94,6 @@ def run_cmd(env: config.EnvironmentConfig,
         # exit()
         while not distribute_ok:
             for server in server_list:
-                if distribute_ok:
-                    tqdm.write(
-                        f"Distribute to {server} with cpt dir: {cpt_output_dir}")
-                    break
 
                 time.sleep(2)
                 distribute_ok = remote.check_load_and_run(
@@ -104,6 +101,11 @@ def run_cmd(env: config.EnvironmentConfig,
                     os.path.basename(gem5_bin),
                     max_proc_per_server
                 )
+                
+                if distribute_ok:
+                    tqdm.write(
+                        f"Distribute to {server} with cpt dir: {cpt_output_dir}")
+                    break
 
 
 def issue_archs(env: config.EnvironmentConfig,
@@ -237,12 +239,13 @@ def calculate_performance_scores(finish_configs: list[str], base_dir: str, env: 
         # Calculate performance score for completed configuration
         config_path = os.path.join(base_dir, config_name)
         score_file = f"{config_path}.score.txt"
+        version = "-17" if env.workload_version == "spec2017" else ""
 
         # Prepare score calculation command
         score_cmd = [
             f"export PYTHONPATH={env.gem5_data_proc_home}:$PYTHONPATH",
             f"cd {env.gem5_data_proc_home}",
-            f"bash example-scripts/gem5-score-ci.sh {config_path} /nfs/home/share/gem5_ci/spec06_cpts/cluster-0-0.json > {score_file}"
+            f"bash example-scripts/gem5-score-ci{version}.sh {config_path} {env.workload_root}/cluster-0-0.json > {score_file}"
         ]
 
         # Execute score calculation

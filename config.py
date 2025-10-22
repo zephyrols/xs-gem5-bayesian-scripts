@@ -1,5 +1,6 @@
 import yaml
 import os
+import re
 import pathlib
 from dataclasses import dataclass
 from skopt.space import Dimension, Categorical, Integer, Real
@@ -34,6 +35,8 @@ class EnvironmentConfig:
     gem5_data_proc_home: str
     restorer: dict[str, str]
     ref_so: dict[str, str]
+    workload_root: str
+    workload_version: str
 
 
 @dataclass
@@ -220,7 +223,8 @@ def getcpts(workloads_path: str, workload_name: str, weight_threshold: float) ->
     checkpoint_paths = []
     for wl_dir in workload_dirs:
         paths = [
-            str(path) for path in pathlib.Path(wl_dir).glob("**/*.zstd")
+            str(path) for ext in ("zstd", "gz")
+            for path in pathlib.Path(wl_dir).glob(f"**/*.{ext}")
             if path.is_file()
         ]
         checkpoint_paths.extend(paths)
@@ -229,7 +233,8 @@ def getcpts(workloads_path: str, workload_name: str, weight_threshold: float) ->
     weighted_checkpoints = []
     for path in checkpoint_paths:
         try:
-            weight = float(path.split("/")[-1].split("_")[-2])
+            matchs = re.findall(r'(\d+)_([0-9]*\.?[0-9]+)', path.split("/")[-1])
+            weight = float(matchs[0][1])
             weighted_checkpoints.append({"weight": weight, "path": path})
         except (IndexError, ValueError):
             continue  # Skip paths with invalid format
@@ -273,7 +278,9 @@ def load_yaml(config_file: str) -> tuple[EnvironmentConfig, RunningConfig, list[
         bin_home=config["environment"]["bin_home"],
         gem5_data_proc_home=config["environment"]["gem5_data_proc_home"],
         restorer=config["environment"]["restorer"],
-        ref_so=config["environment"]["ref_so"]
+        ref_so=config["environment"]["ref_so"],
+        workload_root=config["workloads"]["workloads_path"],
+        workload_version=config["workloads"].get("workload_version")
     )
 
     run = RunningConfig(

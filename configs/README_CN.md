@@ -106,7 +106,7 @@ workloads:
 
 检查点文件应位于 `workloads_path` 目录下，并以 workload 名称命名的子目录中。
 
-脚本会根据 workload_list 遍历 workloads_path 目录，查找每个以 workload 名称命名的子目录，并在其中递归搜索符合命名规则的检查点文件。每个 workload 可以包含多个检查点，检查点文件可以存放在任意层级的子目录下，但其文件名必须符合以下格式：`<any>_<int>_<float>_.zstd`，其中：
+脚本会根据 workload_list 遍历 workloads_path 目录，查找每个以 workload 名称命名的子目录，并在其中递归搜索符合命名规则的检查点文件。每个 workload 可以包含多个检查点，检查点文件可以存放在任意层级的子目录下，但其文件名必须符合以下格式：`<any>_<int>_<float>_?.<zstd|gz>`，其中：
 
 * `<any>`：任意字符串，无特殊要求，可为空，例如 foo、bar、_ 等；
 
@@ -114,7 +114,7 @@ workloads:
 
 * `<float>`：浮点数，表示该检查点的权重，例如 0.08、0.19；
 
-* `<int>_<float>` 这个组合在 同一 `workload` 必须下唯一，用于唯一标识一个检查点。
+* `_<int>_<float>` 这个组合在 同一 `workload` 必须下唯一，用于唯一标识一个检查点。
 
 对于同一个 `workload` 的不同检查点，脚本会按权重将其从高到低排序，并依次加入待测序列，直到该 `workload` 的检查点权重之和不小于 `run_weight`。
 
@@ -125,12 +125,12 @@ workloads:
 ├── workload1
 │   ├── checkpoint1
 │   │   └── foo_100000000_0.08_.zstd
-│   ├── bar_200000000_0.19_.zstd
+│   ├── bar_200000000_0.19.zstd
 │   │
 │   ...
 ├── workload2
 │   ├── checkpoint1
-│   │   └── _300000000_0.75_.zstd
+│   │   └── _300000000_0.75_.gz
 │   ...
 ...
 ```

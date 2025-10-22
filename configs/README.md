@@ -103,7 +103,7 @@ workloads:
 ### Note
 The checkpoint file should be located under the 'workloads_path' directory in a subdirectory named workload.
 
-The script traverses the workloads_path directory based on workload_list, looking for each subdirectory named workload, and recursively searching for a checkpoint file that matches the naming convention. Each workload can contain multiple checkpoints. The checkpoint files can be placed in any level of subdirectories, but they must be named in the following format: `<any>_<int>_<float>_.zstd`, where:
+The script traverses the workloads_path directory based on workload_list, looking for each subdirectory named workload, and recursively searching for a checkpoint file that matches the naming convention. Each workload can contain multiple checkpoints. The checkpoint files can be placed in any level of subdirectories, but they must be named in the following format: `<any>_<int>_<float>_?.<zstd|gz>`, where:
 
 * `<any>` : any string, can be empty, like foo, bar, _, etc.
 
@@ -111,7 +111,7 @@ The script traverses the workloads_path directory based on workload_list, lookin
 
 * `<float>` : a floating point number representing the weight of the checkpoint, e.g. 0.08, 0.19;
 
-* The combination of `<int>_<float>` must be unique within the same `workload` and is used to uniquely identify a checkpoint.
+* The combination of `_<int>_<float>` must be unique within the same `workload` and is used to uniquely identify a checkpoint.
 
 For different checkpoints of the same `workload`, the script will sort them from highest to lowest weight and add them to the column to be sequenced one by one until the sum of checkpoint weights of the `workload` is not less than `run_weight`.
 
@@ -122,12 +122,12 @@ An example checkpoint directory structure is as follows:
 ├── workload1
 │   ├── checkpoint1
 │   │   └── foo_100000000_0.08_.zstd
-│   ├── bar_200000000_0.19_.zstd
+│   ├── bar_200000000_0.19.zstd
 │   │
 │   ...
 ├── workload2
 │   ├── checkpoint1
-│   │   └── _300000000_0.75_.zstd
+│   │   └── _300000000_0.75_.gz
 │   ...
 ...
 ```
