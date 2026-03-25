@@ -1,138 +1,161 @@
-environment:
-  gem5_home: "/nfs/home/$(whoami)/repos/gem5"
-  bin_home:  "/nfs/home/$(whoami)/repos/gem5/build/RISCV"
-  gem5_data_proc_home: "/nfs/home/$(whoami)/repos/gem5_data_proc" # [gem5_data_proc](https://github.com/shinezyy/gem5_data_proc)
+# ── GEM5 Simulation Config ───────────────────────────────────
+
+gem5:
+  home: /path/to/gem5
+  bin_home: /path/to/gem5/build/Arch
+  binary: gem5.fast
   restorer:
-    type: "GCB_RESTORER"
-    path: ""  # if checkpoint has included restorer, leave it empty
-  ref_so: 
-    type: "GCBV_REF_SO"
-    path: "/nfs/home/share/gem5_ci/ref/normal/riscv64-nemu-interpreter-so"
+    type: GCB_RESTORER
+    path: sources/coremark-riscv64-xs.bin
+  ref_so:
+    type: GCBV_REF_SO
+    path: sources/riscv64-nemu-notama-tvalref-so
 
-running:
-  gem5_bin: "gem5.opt"
-  output_base_dir: "/nfs/home/$(whoami)/gem5_output"
-  resume: false
-  max_proc_per_server: 4
+run:
+  output_dir: ./output/example-run  # output directory for this run
+  resume: true
+  checkpoint_weight: 0.8    # simpoint cumulative weight threshold
 
-workloads:     
-  workloads_path:
-    "/nfs/home/share/jiaxiaoyu/simpoint_checkpoint_archive/spec06_rv64gcb_O3_20m_gcc12.2.0-intFpcOff-jeMalloc/zstd-checkpoint-0-0-0"
-  run_weight: 0.5
-  workload_list:
-    # SPEC CPU2006 Int
-    - "perlbench_checkspam"
-    - "perlbench_diffmail"
-    - "perlbench_splitmail"
-    - "bzip2_chicken"
-    - "bzip2_combined"
-    - "bzip2_html"
-    - "bzip2_liberty"
-    - "bzip2_program"
-    - "bzip2_source" 
-    - "gcc_166"
-    - "gcc_200"
-    - "gcc_cpdecl"
-    - "gcc_expr"
-    - "gcc_expr2"
-    - "gcc_g23"
-    - "gcc_s04"
-    - "gcc_scilab"
-    - "gcc_typeck"
-    - "mcf"
-    - "gobmk_13x13"
-    - "gobmk_nngs"
-    - "gobmk_score2"
-    - "gobmk_trevorc"
-    - "gobmk_trevord"
-    - "hmmer_nph3"
-    - "hmmer_retro"
-    - "sjeng"
-    - "libquantum"
-    - "h264ref_foreman.baseline"
-    - "h264ref_foreman.main"
-    - "h264ref_sss"
-    - "omnetpp"
-    - "astar_biglakes"
-    - "astar_rivers"
-    - "xalancbmk"
-    
-    # SPEC CPU2006 FP
-    - "bwaves" 
-    - "gamess_cytosine"
-    - "gamess_gradient"
-    - "gamess_triazolium"
-    - "milc"
-    - "zeusmp"
-    - "gromacs"
-    - "cactusADM"
-    - "leslie3d"
-    - "namd"
-    - "dealII"
-    - "soplex_pds-50"
-    - "soplex_ref"
-    - "povray"
-    - "calculix"
-    - "GemsFDTD"
-    - "tonto"
-    - "lbm"
-    - "wrf"
-    - "sphinx3"
+scoring:
+  data_proc_home: third_party/gem5_data_proc
+
+cluster:
+  max_procs_per_node: 64  # max concurrent processes per server
+  shell_init:         # commands executed before each remote job
+    - source ~/miniconda3/etc/profile.d/conda.sh
+    - conda activate gem5env
+    - export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+  servers:
+    - node001.example.com
+    - node002.example.com
+    # add more nodes as needed
+
+# ── Workload Selection ───────────────────────────────────────
+
+workloads:
+  preset: spec2006
+  # only: [mcf, lbm]        # run only these benchmarks
+  # exclude: [sphinx3]       # skip these benchmarks
+
+# ── Architecture Configs ─────────────────────────────────────
 
 archs:
-  - name: "example-config-kmh_v3"
-    script_file: "configs/example/xiangshan.py"
-    script_params:
-      - "--ideal-kmhv3"
-      
-  - name: "example-config-kmh_v2"
-    script_file: "configs/example/kmh.py"
-    script_params:
-      - "--kmh-align"
-
-servers:
-  - "open07"
-  - "open08"
-  - "open09"
-  - "open10"
-  - "open11"
-  - "open12"
-  - "open13"
-  - "open14"
-  - "open15"
-  # - "open16", # Ryzen 9 5950X 16c32t
-  # - "open17", # Ryzen 9 5950X 16c32t
-  # - "open18", # Ryzen 9 5950X 16c32t
-  # - "open19", # Ryzen 9 5950X 16c32t
-  # - "open20", # Ryzen 9 5950X 16c32t
-  - "open21"
-  - "open22"
-  - "open23"
-  - "open24"
-  - "open25"
-  - "open26"
-  - "open27"
+  defaults:
+    script: configs/example/xiangshan.py
+  configs:
+    - name: V2_Baseline
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
 
 
+# ── Workload Presets ─────────────────────────────────────────
+
+presets:
+  spec2006:
+    path: /path/to/spec06/checkpoints
+    list:
+      - perlbench_checkspam
+      - perlbench_diffmail
+      - perlbench_splitmail
+      - bzip2_chicken
+      - bzip2_combined
+      - bzip2_html
+      - bzip2_liberty
+      - bzip2_program
+      - bzip2_source
+      - gcc_166
+      - gcc_200
+      - gcc_cpdecl
+      - gcc_expr
+      - gcc_expr2
+      - gcc_g23
+      - gcc_s04
+      - gcc_scilab
+      - gcc_typeck
+      - mcf
+      - gobmk_13x13
+      - gobmk_nngs
+      - gobmk_score2
+      - gobmk_trevorc
+      - gobmk_trevord
+      - hmmer_nph3
+      - hmmer_retro
+      - sjeng
+      - libquantum
+      - h264ref_foreman.baseline
+      - h264ref_foreman.main
+      - h264ref_sss
+      - omnetpp
+      - astar_biglakes
+      - astar_rivers
+      - xalancbmk
+      - bwaves
+      - gamess_cytosine
+      - gamess_gradient
+      - gamess_triazolium
+      - milc
+      - zeusmp
+      - gromacs
+      - cactusADM
+      - leslie3d
+      - namd
+      - dealII
+      - soplex_pds-50
+      - soplex_ref
+      - povray
+      - calculix
+      - GemsFDTD
+      - tonto
+      - lbm
+      - wrf
+      - sphinx3
+
+  spec2017:
+    path: /path/to/spec17/checkpoints
+    list:
+      - perlbench_spam
+      - perlbench_diff
+      - perlbench_split
+      - gcc_pp_O2
+      - gcc_pp_O3
+      - gcc_ref32_O3
+      - gcc_ref32_O5
+      - gcc_small_O3
+      - mcf
+      - omnetpp
+      - xalancbmk
+      - x264_pass1
+      - x264_pass2
+      - x264_seek
+      - deepsjeng
+      - leela
+      - exchange2
+      - xz_cld
+      - xz_combined
+      - xz_cpu2006
+      - bwaves_1
+      - bwaves_2
+      - bwaves_3
+      - bwaves_4
+      - cactuBSSN
+      - lbm
+      - wrf
+      - blender
+      - cam4
+      - imagick
+      - nab
+      - fotonik3d
+      - roms
+      - povray
+      - namd
+      - parest
+
+# ── Optimization (optional) ─────────────────────────────────
 optimization:
-  constant_params:    
-    - "--ideal-kmhv3"
-    - "--l1d-enable-pht"
-  param_space:        
-    - name: "--example-categorical"      
-      type: "categorical"            
-      values: ["value1", "value2"]
-    - name: "--example-pow2"            
-      type: "pow2"                   
-      min_exp: 2                     
-      max_exp: 6                     
-    - name: "--example-continuous-float" 
-      type: "float"
-      min_float: 1.0
-      max_float: 10.0
-    - name: "--example-continuous-integer" 
-      type: "integer"
-      min_int: 1
-      max_int: 10
-    - name: "--example-boolean"          
-      type: "boolean"
+  constants: [--some-fixed-flag]
+  space:
+    - { name: l1d_size,   type: pow2,   range: [4, 8] }
+    - { name: l2_assoc,   type: int,    range: [4, 16] }
+    - { name: prefetcher, type: choice, values: [none, stride, bop] }
+    - { name: use_victim, type: bool }

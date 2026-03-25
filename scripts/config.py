@@ -1,399 +1,310 @@
-import yaml
+"""
+GEM5 Config Loader
+==================
+Usage:
+    cfg = Config.load("config.yaml")
+    cfg.gem5.home
+    cfg.gem5.bin_path          # derived: home/test/optimize/bin/{binary}
+    cfg.gem5.data_proc_home    # derived: home/test/gem5_data_proc
+    cfg.workloads[0].checkpoints
+    cfg.archs[0].script_path   # derived: home/{script}
+    cfg.cluster.servers
+"""
+
 import os
 import re
 import pathlib
-from dataclasses import dataclass
-from skopt.space import Dimension, Categorical, Integer, Real
+from typing import Any, Dict, List, Optional
+
+import yaml
+from pydantic import BaseModel, Field, computed_field
 
 
-@dataclass
-class ArchParamConfig:
-    """
-    Class to hold arch arch configuration parameters
-    """
-    arch_name: str
-    script_path: str
-    script_params: list[str]
+# ═══════════════════════════════════════════════════════════════
+#  Models
+# ═══════════════════════════════════════════════════════════════
+
+class TypedPath(BaseModel):
+    type: str
+    path: str = ""
 
 
-@dataclass
-class WorkloadConfig:
-    """
-    Class to hold workload configuration parameters
-    """
-    workload_name: str
-    cpt_path_list: list[str]
-
-
-@dataclass
-class EnvironmentConfig:
-    """
-    Class to hold environment configuration parameters
-    """
-    gem5_home: str
+class Gem5(BaseModel):
+    home: str
     bin_home: str
-    gem5_data_proc_home: str
-    restorer: dict[str, str]
-    ref_so: dict[str, str]
-    workload_root: str
-    workload_version: str
+    binary: str
+    restorer: TypedPath
+    ref_so: TypedPath
+
+    @computed_field
+    @property
+    def bin_path(self) -> str:
+        return os.path.join(self.bin_home, self.binary)
 
 
-@dataclass
-class RunningConfig:
-    """
-    Class to hold running configuration parameters
-    """
-    gem5_bin: str
-    max_proc_per_server: int
-    output_base_dir: str
-    resume: bool
+class Scoring(BaseModel):
+    data_proc_home: str
 
 
-@dataclass
-class OptimizationConfig:
-    """
-    Class to hold optimization configuration parameters
-    """
-    constant_params: list[str]
-    param_space: list[Dimension]
+class Run(BaseModel):
+    output_dir: str
+    resume: bool = True
+    checkpoint_weight: float = 1.0
 
 
-def pow2range(min_power, max_power):
-    """Create a list of powers of two from 2^min_power to 2^max_power."""
-    return [2**i for i in range(min_power, max_power+1)]
+class Cluster(BaseModel):
+    max_procs_per_node: int = 64
+    shell_init: List[str] = Field(default_factory=list)
+    servers: List[str] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def total_capacity(self) -> int:
+        return self.max_procs_per_node * len(self.servers)
 
 
-def parse_param_space(param: dict):
-    """
-    Parse a parameter space definition into a skopt.space Dimension object.
-    
-    Args:
-        param: Dictionary with parameter space definition including 'name', 'type',
-               and type-specific values
-    
-    Returns:
-        A skopt.space Dimension object representing the parameter space
-    
-    Raises:
-        ValueError: If an unsupported parameter space type is provided or required parameters are missing
-        TypeError: If parameters have incorrect types
-    """
-    if not isinstance(param, dict):
-        raise TypeError(f"Parameter definition must be a dictionary, got {type(param).__name__}")
-    
-    if "name" not in param:
-        raise ValueError("Parameter definition missing required 'name' field")
-    
-    if "type" not in param:
-        raise ValueError("Parameter definition missing required 'type' field")
-    
-    name = param["name"]
-    if not isinstance(name, str):
-        raise TypeError(f"Parameter name must be a string, got {type(name).__name__}")
-        
-    space_type = param["type"].lower()
+class Workload(BaseModel):
+    name: str
+    checkpoints: List[str]
 
-    if space_type == "integer":
-        if "min_int" not in param:
-            raise ValueError(f"Integer parameter '{name}' missing required 'min_int' field")
-        if "max_int" not in param:
-            raise ValueError(f"Integer parameter '{name}' missing required 'max_int' field")
-        
-        min_val = param["min_int"]
-        max_val = param["max_int"]
 
-        if not isinstance(min_val, int):
-            raise TypeError(f"'min_int' for parameter '{name}' must be an integer, got {type(min_val).__name__}")
-        if not isinstance(max_val, int):
-            raise TypeError(f"'max_int' for parameter '{name}' must be an integer, got {type(max_val).__name__}")
-            
-        if min_val > max_val:
-            raise ValueError(f"'min_int' ({min_val}) must be less than or equal to 'max_int' ({max_val}) for parameter '{name}'")
-            
-        return Integer(min_val, max_val, name=name)
-        
-    elif space_type == "float":
+class Arch(BaseModel):
+    name: str
+    script_path: str
+    params: List[str]
 
-        if "min_float" not in param:
-            raise ValueError(f"Float parameter '{name}' missing required 'min_float' field")
-        if "max_float" not in param:
-            raise ValueError(f"Float parameter '{name}' missing required 'max_float' field")
-            
-        min_val = param["min_float"]
-        max_val = param["max_float"]
-        
-        if not isinstance(min_val, (int, float)):
-            raise TypeError(f"'min_float' for parameter '{name}' must be a number, got {type(min_val).__name__}")
-        if not isinstance(max_val, (int, float)):
-            raise TypeError(f"'max_float' for parameter '{name}' must be a number, got {type(max_val).__name__}")
-            
-        if min_val > max_val:
-            raise ValueError(f"'min_float' ({min_val}) must be less than or equal to 'max_float' ({max_val}) for parameter '{name}'")
-            
-        return Real(min_val, max_val, name=name)
-        
-    elif space_type == "pow2":
 
-        if "min_exp" not in param:
-            raise ValueError(f"Pow2 parameter '{name}' missing required 'min_exp' field")
-        if "max_exp" not in param:
-            raise ValueError(f"Pow2 parameter '{name}' missing required 'max_exp' field")
-            
-        min_exp = param["min_exp"]
-        max_exp = param["max_exp"]
-        
-        if not isinstance(min_exp, int):
-            raise TypeError(f"'min_exp' for parameter '{name}' must be an integer, got {type(min_exp).__name__}")
-        if not isinstance(max_exp, int):
-            raise TypeError(f"'max_exp' for parameter '{name}' must be an integer, got {type(max_exp).__name__}")
-            
-        if min_exp > max_exp:
-            raise ValueError(f"'min_exp' ({min_exp}) must be less than or equal to 'max_exp' ({max_exp}) for parameter '{name}'")
-            
-        return Categorical(
-            pow2range(min_exp, max_exp),
-            name=name
-        )
-        
-    elif space_type == "categorical":
+class ParamDef(BaseModel):
+    name: str
+    type: str  # int | float | pow2 | choice | bool
+    range: Optional[List[float]] = None
+    values: Optional[List[Any]] = None
 
-        if "values" not in param:
-            raise ValueError(f"Categorical parameter '{name}' missing required 'values' field")
-            
-        values = param["values"]
-        
-        if not isinstance(values, list):
-            raise TypeError(f"'values' for parameter '{name}' must be a list, got {type(values).__name__}")
-            
-        if len(values) == 0:
-            raise ValueError(f"'values' list for categorical parameter '{name}' cannot be empty")
-            
-        return Categorical(values, name=name)
-        
-    elif space_type == "boolean":
-        return Categorical([True, False], name=name)
-        
-    else:
-        raise ValueError(f"Unsupported parameter space type: {space_type}")
 
-def load_optimization_config(config_file: str) -> OptimizationConfig:
-    """
-    Parse optimization configuration from a YAML file.
-    
-    Args:
-        config_file: Path to the YAML configuration file
-        
-    Returns:
-        OptimizationConfig object with parsed configuration
-        
-    """
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
+class Optimization(BaseModel):
+    constants: List[str] = Field(default_factory=list)
+    space: List[ParamDef] = Field(default_factory=list)
 
-    opt_config = config["optimization"]
-    constant_params = opt_config["constant_params"] if "constant_params" in opt_config else []
-    return OptimizationConfig(
-        constant_params=constant_params,
-        param_space=[
-            parse_param_space(param)
-            for param in opt_config["param_space"]
-        ]
-    )
+    def to_skopt(self):
+        """list[skopt.space.Dimension]. Lazy-imports scikit-optimize."""
+        from skopt.space import Categorical, Integer, Real
+        builders = {
+            "int":    lambda p: Integer(int(p.range[0]), int(p.range[1]), name=p.name),
+            "float":  lambda p: Real(p.range[0], p.range[1], name=p.name),
+            "pow2":   lambda p: Categorical([2**i for i in range(int(p.range[0]), int(p.range[1]) + 1)], name=p.name),
+            "choice": lambda p: Categorical(p.values, name=p.name),
+            "bool":   lambda p: Categorical([True, False], name=p.name),
+        }
+        return [builders[p.type](p) for p in self.space]
 
-def getcpts(workloads_path: str, workload_name: str, weight_threshold: float) -> list:
-    """
-    Get checkpoint paths for a workload that meet a coverage threshold.
 
-    Args:
-        workloads_path: Path to the directory containing workload checkpoints
-        workload_name: Name of the workload to find checkpoints for
-        weight_threshold: Minimum cumulative weight of checkpoints to include
+# ═══════════════════════════════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════════════════════════════
 
-    Returns:
-        List of checkpoint paths sorted by weight (highest first)
-    """
-    # Find all directories matching the workload pattern
-    workload_dirs = [
-        str(path) for path in pathlib.Path(workloads_path).glob(workload_name)
-        if path.is_dir()
+_WEIGHT_RE = re.compile(r"(\d+)_([0-9]*\.?[0-9]+)")
+
+
+def _discover_checkpoints(root: str, name: str, weight: float) -> List[str]:
+    """Find checkpoint files sorted by simpoint weight, accumulated up to *weight*."""
+    dirs = [d for d in pathlib.Path(root).glob(name) if d.is_dir()]
+    files = [
+        p for d in dirs
+        for ext in ("zstd", "gz")
+        for p in d.glob(f"**/*.{ext}") if p.is_file()
     ]
 
-    # Find all checkpoint files across these directories
-    checkpoint_paths = []
-    for wl_dir in workload_dirs:
-        paths = [
-            str(path) for ext in ("zstd", "gz")
-            for path in pathlib.Path(wl_dir).glob(f"**/*.{ext}")
-            if path.is_file()
-        ]
-        checkpoint_paths.extend(paths)
+    weighted = []
+    for f in files:
+        m = _WEIGHT_RE.findall(f.name)
+        if m:
+            weighted.append((float(m[0][1]), str(f)))
+    weighted.sort(reverse=True)
 
-    # Extract weights from paths and create (weight, path) pairs
-    weighted_checkpoints = []
-    for path in checkpoint_paths:
-        try:
-            matchs = re.findall(r'(\d+)_([0-9]*\.?[0-9]+)', path.split("/")[-1])
-            weight = float(matchs[0][1])
-            weighted_checkpoints.append({"weight": weight, "path": path})
-        except (IndexError, ValueError):
-            continue  # Skip paths with invalid format
-
-    # Sort checkpoints by weight in descending order
-    sorted_checkpoints = sorted(
-        weighted_checkpoints, key=lambda x: x["weight"], reverse=True)
-
-    # Select checkpoints up to the weight threshold
-    selected_paths = []
-    cumulative_weight = 0
-
-    for checkpoint in sorted_checkpoints:
-        if cumulative_weight >= weight_threshold:
+    selected, total = [], 0.0
+    for w, path in weighted:
+        if total >= weight:
             break
-        selected_paths.append(checkpoint["path"])
-        cumulative_weight += checkpoint["weight"]
+        selected.append(path)
+        total += w
+    return selected
 
-    return selected_paths
 
-def load_yaml(config_file: str) -> tuple[EnvironmentConfig, RunningConfig, list[WorkloadConfig], list[ArchParamConfig], list[str]]:
-    """
-    Load configuration from a YAML file.
+# ═══════════════════════════════════════════════════════════════
+#  Root Config
+# ═══════════════════════════════════════════════════════════════
 
-    Args:
-        config_file: Path to the YAML configuration file
+class Config(BaseModel):
+    gem5: Gem5
+    run: Run
+    scoring: Scoring
+    cluster: Cluster
+    workloads: List[Workload]
+    archs: List[Arch]
+    preset_name: str = ""          # e.g. "spec2006", "spec2017"
+    preset_path: str = ""          # root path of the active preset's checkpoints
+    optimization: Optional[Optimization] = None
 
-    Returns:
-        Tuple containing:
-            - EnvironmentConfig: Configuration for the environment
-            - RunningConfig: Configuration for running parameters
-            - List of WorkloadConfig: List of workload configurations
-            - List of ArchParamConfig: List of architecture parameter configurations
-            - List of server names or IP addresses
-    """    
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
+    @classmethod
+    def load(cls, path: str) -> "Config":
+        with open(path) as f:
+            raw = yaml.safe_load(f)
 
-    env = EnvironmentConfig(
-        gem5_home=config["environment"]["gem5_home"],
-        bin_home=config["environment"]["bin_home"],
-        gem5_data_proc_home=config["environment"]["gem5_data_proc_home"],
-        restorer=config["environment"]["restorer"],
-        ref_so=config["environment"]["ref_so"],
-        workload_root=config["workloads"]["workloads_path"],
-        workload_version=config["workloads"].get("workload_version")
-    )
+        # ── gem5 ─────────────────────────────────────────────
+        gem5 = Gem5(**raw["gem5"])
 
-    run = RunningConfig(
-        gem5_bin=os.path.join(env.bin_home, config["running"]["gem5_bin"]),
-        output_base_dir=os.path.abspath(config["running"]["output_base_dir"]),
-        resume=config["running"]["resume"],
-        max_proc_per_server=config["running"]["max_proc_per_server"],
-    )
-    workload_list = [
-        WorkloadConfig(
-            workload_name=workload,
-            cpt_path_list=getcpts(
-                config["workloads"]["workloads_path"],
-                workload,
-                config["workloads"]["run_weight"])
+        # ── run ──────────────────────────────────────────────
+        run_raw = raw["run"]
+        run = Run(
+            output_dir=os.path.abspath(run_raw["output_dir"]),
+            resume=run_raw.get("resume", True),
+            checkpoint_weight=run_raw.get("checkpoint_weight", 1.0),
         )
-        for workload in config["workloads"]["workload_list"]
-    ]
 
-    arch_list = [
-        ArchParamConfig(
-            arch_name=arch["name"],
-            script_path=os.path.join(env.gem5_home, arch["script_file"]),
-            script_params=arch["script_params"] if "script_params" in arch else []
+        # ── cluster ──────────────────────────────────────────
+        cluster = Cluster(**raw.get("cluster", {}))
+
+        # ── scoring ──────────────────────────────────────────
+        scoring = Scoring(**raw["scoring"])
+
+        # ── workloads ────────────────────────────────────────
+        wl_cfg = raw["workloads"]
+        preset_key = wl_cfg["preset"]
+        presets = raw.get("presets", {})
+
+        if preset_key not in presets:
+            available = ", ".join(presets) or "(none)"
+            raise ValueError(f"Preset '{preset_key}' not found. Available: {available}")
+
+        preset = presets[preset_key]
+        names: List[str] = list(preset["list"])
+
+        if only := wl_cfg.get("only"):
+            keep = set(only)
+            names = [n for n in names if n in keep]
+        if exclude := wl_cfg.get("exclude"):
+            drop = set(exclude)
+            names = [n for n in names if n not in drop]
+
+        workloads = [
+            Workload(
+                name=n,
+                checkpoints=_discover_checkpoints(
+                    preset["path"], n, run.checkpoint_weight,
+                ),
+            )
+            for n in names
+        ]
+
+        # ── archs ────────────────────────────────────────────
+        archs_raw = raw.get("archs", {})
+        defaults = archs_raw.get("defaults", {})
+        default_script = defaults.get("script", "configs/example/xiangshan.py")
+        default_params = defaults.get("params", [])
+
+        archs = [
+            Arch(
+                name=a["name"],
+                script_path=os.path.join(gem5.home, a.get("script", default_script)),
+                params=a.get("params", list(default_params)),
+            )
+            for a in archs_raw.get("configs", [])
+        ]
+
+        # ── optimization ─────────────────────────────────────
+        opt = Optimization(**raw["optimization"]) if "optimization" in raw else None
+
+        return cls(
+            gem5=gem5, run=run, scoring=scoring, cluster=cluster,
+            workloads=workloads, archs=archs,
+            preset_name=preset_key, preset_path=preset["path"],
+            optimization=opt,
         )
-        for arch in config["archs"]
-    ] if "archs" in config else []
 
-    server_list = config["servers"]
+    # ── display ──────────────────────────────────────────────
 
-    return env, run, workload_list, arch_list, server_list
+    def show(self, verbose: bool = False) -> str:
+        lines: List[str] = []
 
-def print_config(config_file: str):
-    """
-    Print the configuration loaded from a YAML file.
+        def h(title: str):
+            lines.append(f"\n{'─' * 60}")
+            lines.append(f"  {title}")
+            lines.append(f"{'─' * 60}")
 
-    Args:
-        config_file: Path to the YAML configuration file
-    """
+        h("GEM5")
+        lines.append(f"  home           : {self.gem5.home}")
+        lines.append(f"  bin_home       : {self.gem5.bin_home}")
+        lines.append(f"  binary         : {self.gem5.bin_path}")
+        lines.append(f"  restorer       : {self.gem5.restorer.type}  {self.gem5.restorer.path or '(embedded)'}")
+        lines.append(f"  ref_so         : {self.gem5.ref_so.type}  {self.gem5.ref_so.path}")
 
-    # Print the loaded configuration
-    env, run, workload_list, arch_list, server_list = load_yaml(config_file)
+        h("Run")
+        lines.append(f"  output_dir        : {self.run.output_dir}")
+        lines.append(f"  resume            : {self.run.resume}")
+        lines.append(f"  checkpoint_weight : {self.run.checkpoint_weight}")
 
-    # Print the configuration in a formatted way
-    def print_header(title, width=80):
-        print("\n" + "=" * width)
-        print(f" {title} ".center(width, "="))
-        print("=" * width)
+        h("Scoring")
+        lines.append(f"  data_proc_home : {self.scoring.data_proc_home}")
 
-    print_header("Environment")
-    print(f"gem5_home: {env.gem5_home}")
-    print(f"bin_home:  {env.bin_home}")
-    print(f"gem5_data_proc_home: {env.gem5_data_proc_home}")
-    print(f"restorer:")
-    print(f"  type: {env.restorer['type']}")
-    print(f"  path: {env.restorer['path']}")
-    print(f"ref_so:")
-    print(f"  type: {env.ref_so['type']}")
-    print(f"  path: {env.ref_so['path']}")
+        h(f"Cluster ({len(self.cluster.servers)} nodes, capacity {self.cluster.total_capacity})")
+        lines.append(f"  max_procs_per_node : {self.cluster.max_procs_per_node}")
+        if self.cluster.shell_init:
+            lines.append(f"  shell_init:")
+            for cmd in self.cluster.shell_init:
+                lines.append(f"    $ {cmd}")
+        for i, s in enumerate(self.cluster.servers, 1):
+            lines.append(f"  {i:2d}. {s}")
 
-    print_header("Running")
-    print(f"gem5_bin:            {run.gem5_bin}")
-    print(f"max_proc_per_server: {run.max_proc_per_server}")
-    print(f"output_base_dir:     {run.output_base_dir}")
-    print(f"resume:              {run.resume}")
+        h(f"Workloads ({len(self.workloads)}, preset: {self.preset_name})")
+        lines.append(f"  preset_path : {self.preset_path}")
+        for w in self.workloads:
+            lines.append(f"  {w.name:30s}  {len(w.checkpoints)} cpts")
+            if verbose:
+                for c in w.checkpoints:
+                    lines.append(f"      {c}")
 
-    print_header("Workloads")
-    for i, workload in enumerate(workload_list, 1):
-        print(f"Workload #{i}: {workload.workload_name}")
-        print("  checkpoints:")
-        for path in workload.cpt_path_list:
-            print(f"    - {path}")
-        print()
+        h(f"Archs ({len(self.archs)})")
+        for a in self.archs:
+            lines.append(f"  [{a.name}]")
+            lines.append(f"    {a.script_path}")
+            lines.append(f"    {' '.join(a.params)}")
 
-    print_header("Architecture Parameters")
-    for i, arch in enumerate(arch_list, 1):
-        print(f"ArchName #{i}: {arch.arch_name}")
-        print(f"  Script: {arch.script_path}")
-        print("  Params:")
-        for param in arch.script_params:
-            print(f"    - {param}")
-        print()
+        if self.optimization:
+            h("Optimization")
+            for c in self.optimization.constants:
+                lines.append(f"  const: {c}")
+            for p in self.optimization.space:
+                lines.append(f"  {p.name:20s}  {p.type}  {p.range or p.values or ''}")
 
-    print_header("Servers")
-    for i, server in enumerate(server_list, 1):
-        print(f"{i}. {server}")
-        
+        return "\n".join(lines)
 
-    try:
-        optConfig = load_optimization_config(config_file=config_file)
-        print_header("Optimization")
-        print("Constant Parameters:")
-        for param in optConfig.constant_params:
-            print(f"  - {param}")
-        
-        print("\nParameter Space:")
-        for param in optConfig.param_space:
-            print(f"  - {param.name}: {param}")
-    except KeyError as e:
-        return
+    def __repr__(self):
+        return (
+            f"Config(archs={len(self.archs)}, "
+            f"workloads={len(self.workloads)}, "
+            f"cluster={len(self.cluster.servers)} nodes)"
+        )
 
+
+# ═══════════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import logging
     import argparse
 
-    argparse = argparse.ArgumentParser(
-        description="Load configuration from a YAML file and print it.")
-    argparse.add_argument(
-        "config_file",
-        type=str,
-        help="Path to the YAML configuration file"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
     )
-    args = argparse.parse_args()
-    config_file = args.config_file
 
-    print_config(config_file)
+    p = argparse.ArgumentParser(description="GEM5 config viewer")
+    p.add_argument("config", help="YAML config path")
+    p.add_argument("-v", "--verbose", action="store_true")
+    args = p.parse_args()
+
+    logging.info("Loading config: %s", args.config)
+    cfg = Config.load(args.config)
+    logging.info("\n%s", cfg.show(verbose=args.verbose))

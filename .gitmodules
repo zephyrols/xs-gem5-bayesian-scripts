@@ -1,0 +1,4 @@
+[submodule "third_party/gem5_data_proc"]
+	path = third_party/gem5_data_proc
+	url = git@github.com:zephyrols/gem5_data_proc.git
+	branch = skip_no_run_bmk

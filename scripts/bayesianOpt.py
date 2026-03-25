@@ -8,6 +8,7 @@ import copy
 # import cust
 import runGem5
 import config
+from typing import List
 
 
 def power_of_two_range(min_power, max_power):
@@ -17,9 +18,9 @@ def power_of_two_range(min_power, max_power):
 
 ENV_CONFIGS: config.EnvironmentConfig
 RUN_CONFIGS: config.RunningConfig
-WORKLOAD_LIST: list[config.WorkloadConfig]
-ARCH_LIST: list[config.ArchParamConfig]
-SERVER_LIST: list[str]
+WORKLOAD_LIST: List[config.WorkloadConfig]
+ARCH_LIST: List[config.ArchParamConfig]
+SERVER_LIST: List[str]
 OPT_CONFIG: config.OptimizationConfig
 
 # define the object value

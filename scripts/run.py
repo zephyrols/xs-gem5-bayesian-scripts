@@ -1,283 +1,225 @@
+"""
+GEM5 Simulation Runner
+======================
+Issue gem5 simulations across a server cluster, monitor progress,
+and compute performance scores.
+
+Usage:
+    python run.py config.yaml
+    python run.py config.yaml -v
+"""
+
+import logging
 import os
 import re
+import sys
 import time
 import argparse
 from datetime import timedelta
+from typing import List
+
 from tqdm import tqdm
 
-# Load custom modules
 import remote
 import checkrun
-import config
+from config import Config, Arch, Workload
+from score import calculate_scores
+
+log = logging.getLogger(__name__)
 
 
-def run_cmd(env: config.EnvironmentConfig,
-            run: config.RunningConfig,
-            workload: config.WorkloadConfig,
-            arch: config.ArchParamConfig,
-            server_list: list[str]):
+# ═══════════════════════════════════════════════════════════════
+#  Logging handler that plays nicely with tqdm
+# ═══════════════════════════════════════════════════════════════
+
+class TqdmHandler(logging.Handler):
+    """Route all log output through tqdm.write so progress bars stay intact."""
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+        except Exception:
+            self.handleError(record)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Issue
+# ═══════════════════════════════════════════════════════════════
+
+def run_cmd(cfg: Config, workload: Workload, arch: Arch):
     """
-    Run gem5 simulation in [server_list] for specified checkpoints with given configuration
-
-    Args:
-        env: Configuration parameters for environment
-        run: Configuration parameters for execution
-        workload: Configuration parameters for workload
-        arch: Configuration parameters for arch and script
-        server_list: List of server names or IP addresses
+    Distribute gem5 checkpoint simulations for one (workload, arch) pair
+    across the server cluster.
     """
+    gem5 = cfg.gem5
+    servers = cfg.cluster.servers
+    max_procs = cfg.cluster.max_procs_per_node
 
-    restorer = env.restorer
-    ref_so = env.ref_so
+    for cpt in tqdm(workload.checkpoints,
+                    desc=f"Issuing {workload.name}", leave=False,
+                    unit="cpt", dynamic_ncols=True):
 
-    gem5_bin = run.gem5_bin
-    max_proc_per_server = run.max_proc_per_server
-    output_base_dir = run.output_base_dir
-    resume = run.resume
+        # ── parse checkpoint id ──────────────────────────────
+        matches = re.findall(r'(\d+)_([0-9]*\.?[0-9]+)', os.path.basename(cpt))
+        inst_num, weight = matches[0]
 
-    arch_name = arch.arch_name
-    script_path = arch.script_path
-    script_params = arch.script_params
-
-    workload_name = workload.workload_name
-    cpt_path_list = workload.cpt_path_list
-
-    for cpt in tqdm(cpt_path_list, desc=f"Issuing {workload_name}", leave=False, unit="checkpoint", dynamic_ncols=True):
-        # Extract identification information from checkpoint path
-        matchs = re.findall(r'(\d+)_([0-9]*\.?[0-9]+)', os.path.basename(cpt))
-        inst_num, weight = matchs[0]
-        
-
-        # Set up output directory
+        # ── output dir ───────────────────────────────────────
         cpt_output_dir = os.path.join(
-            output_base_dir, arch_name, f"{workload_name}_{inst_num}_{weight}")
+            cfg.run.output_dir, arch.name,
+            f"{workload.name}_{inst_num}_{weight}",
+        )
         os.makedirs(cpt_output_dir, exist_ok=True)
 
-        # Skip if output directory exists and simulation is complete
-        if resume and checkrun.check_run(cpt_output_dir)[0] == 1:
-            # tqdm.write(
-            #     f"Skip {cpt_output_dir} because reached max instruction count or m5_exit")
+        # ── skip completed ───────────────────────────────────
+        if cfg.run.resume and checkrun.check_run(cpt_output_dir).complete == 1:
             continue
 
-        # Build the command in sections for better readability
-        # Environment variables
-        env_setup = [
-            # f"export GEM5_HOME={env_config.gem5_home}",
-            f"export {restorer['type']}={restorer['path']}",
-            f"export {ref_so['type']}={ref_so['path']}"
+        # ── build remote command ─────────────────────────────
+        env_setup = list(cfg.cluster.shell_init) + [
+            f"export {gem5.restorer.type}={gem5.restorer.path}",
+            f"export {gem5.ref_so.type}={gem5.ref_so.path}",
         ]
 
-        # Directory preparation
         dir_setup = [
             f"mkdir -p {cpt_output_dir}",
-            f"cd {cpt_output_dir}"
+            f"cd {cpt_output_dir}",
         ]
 
-        # Gem5 binary and output redirection
-        gem5_cmd = [
-            gem5_bin,
+        gem5_cmd = " ".join([
+            gem5.bin_path,
             "--redirect-stdout",
             "--redirect-stderr",
-            script_path,
+            arch.script_path,
             f"--generic-rv-cpt={cpt}",
-        ] + script_params + ["&"]
+            *arch.params,
+            "&",
+        ])
 
-        gem5_cmd = " ".join(gem5_cmd)
+        cmd = "; ".join(env_setup + dir_setup + [gem5_cmd])
 
-        # Construct the full command
-        cmd_parts = env_setup + dir_setup + [gem5_cmd]
-        cmd = "; ".join(cmd_parts)
-
-        # Try to distribute the job until successful
-        distribute_ok = False
-        # tqdm.write(cmd)
-        # exit()
-        while not distribute_ok:
-            for server in server_list:
-
+        # ── distribute until placed ──────────────────────────
+        placed = False
+        while not placed:
+            for server in servers:
                 time.sleep(2)
-                distribute_ok = remote.check_load_and_run(
+                placed = remote.check_load_and_run(
                     server, cmd,
-                    os.path.basename(gem5_bin),
-                    max_proc_per_server
+                    os.path.basename(gem5.bin_path),
+                    max_procs,
                 )
-                
-                if distribute_ok:
-                    tqdm.write(
-                        f"Distribute to {server} with cpt dir: {cpt_output_dir}")
+                if placed:
+                    log.info("→ %s  %s", server, cpt_output_dir)
                     break
 
 
-def issue_archs(env: config.EnvironmentConfig,
-                run: config.RunningConfig,
-                workload_list: list[config.WorkloadConfig],
-                arch_list: list[config.ArchParamConfig],
-                server_list: list[str]) -> list[str]:
+def issue_archs(cfg: Config) -> List[str]:
     """
-    Issue all architecture configurations for execution
-
-    Args:
-        env: Environment configuration
-        run: Running configuration
-        workload_list: List of workload configurations
-        arch_list: List of architecture configurations
-        server_list: List of server names or IP addresses
-
-    Returns:
-        List of successfully issued arch config names
+    Issue all (arch × workload) combinations.
+    Returns list of successfully issued arch names.
     """
+    issued = []
 
-    issued_configs = []
-
-    for arch in tqdm(arch_list, desc="Issuing configurations", unit="config", dynamic_ncols=True):
+    for arch in tqdm(cfg.archs, desc="Architectures", unit="arch", dynamic_ncols=True):
         try:
-            start_time = time.time()
-            # Process each workload for the current configuration
-            for workload in tqdm(workload_list, desc=f"Issuing {arch.arch_name}", leave=False, unit="workload", dynamic_ncols=True):
-                run_cmd(env=env, run=run,
-                        workload=workload,
-                        arch=arch,
-                        server_list=server_list)
+            t0 = time.time()
+            for workload in tqdm(cfg.workloads,
+                                 desc=f"  {arch.name}", leave=False,
+                                 unit="wl", dynamic_ncols=True):
+                run_cmd(cfg, workload, arch)
 
-            # Report completion time
-            elapsed = time.time() - start_time
-            elapsed_str = str(timedelta(seconds=int(elapsed)))
-            tqdm.write(
-                f"✓ Configuration {arch.arch_name} issued in {elapsed_str}")
-            issued_configs.append(arch.arch_name)
+            elapsed = str(timedelta(seconds=int(time.time() - t0)))
+            log.info("✓ %s issued in %s", arch.name, elapsed)
+            issued.append(arch.name)
 
         except Exception as e:
-            tqdm.write(f"! Error Issuing {arch.arch_name}: {e}")
+            log.error("Failed issuing %s: %s", arch.name, e)
 
-    return issued_configs
+    return issued
 
 
-def monitor_run_progress(configs: list[str], base_dir: str, check_interval: int = 10):
+# ═══════════════════════════════════════════════════════════════
+#  Monitor
+# ═══════════════════════════════════════════════════════════════
+
+def monitor_progress(cfg: Config, arch_names: List[str],
+                     interval: int = 10) -> List[str]:
     """
-    Monitor the progress of all running configurations until completion.
-
-    Args:
-        configs: List of configurations to monitor
-        base_dir: Base directory where outputs are stored
-        check_interval: Time between progress checks in seconds
-
-    Returns:
-        List of completed configurations
+    Poll checkpoint completion for each arch until all are done.
+    Returns list of finished arch names.
     """
-    # Initialize progress tracking for each configuration
-    progress_trackers = {}
-    finish_configs = set()
+    trackers = {}
+    finished = set()
 
-    for config_name in configs:
-        complete, error, total, _ = checkrun.check_run(
-            os.path.join(base_dir, config_name))
-        progress_trackers[config_name] = {
-            "tracker": tqdm(
-                total=total,
-                initial=complete+error,
-                desc=f"Progress {config_name}",
-                unit="checkpoint",
-                dynamic_ncols=True,
-            ),
-            "complete": complete,
-            "error": error,
-            "total": total
+    for name in arch_names:
+        r = checkrun.check_run(os.path.join(cfg.run.output_dir, name))
+        trackers[name] = {
+            "bar": tqdm(total=r.total, initial=r.complete + r.error,
+                        desc=f"Progress {name}", unit="cpt",
+                        dynamic_ncols=True),
+            "last": r,
         }
 
-    # Monitor progress until all configurations are complete
-    while finish_configs != set(configs):
-        for config_name in set(configs) - finish_configs:
-            # Get updated status
-            new_complete, new_error, new_total, _ = checkrun.check_run(
-                os.path.join(base_dir, config_name))
+    while finished != set(arch_names):
+        for name in set(arch_names) - finished:
+            r = checkrun.check_run(os.path.join(cfg.run.output_dir, name))
 
-            # Update progress bar
-            progress = progress_trackers[config_name]
-            # finished_tasks = new_complete + new_error - \
-            #     progress["complete"] - progress["error"]
-            # if finished_tasks > 0:
-            #     progress["tracker"].update(finished_tasks)
-            progress["tracker"].n = new_complete + new_error
-            progress["tracker"].refresh()
+            tr = trackers[name]
+            tr["bar"].n = r.complete + r.error
+            tr["bar"].refresh()
+            tr["last"] = r
 
-            # Update stored values
-            progress["complete"] = new_complete
-            progress["error"] = new_error
-            progress["total"] = new_total
+            if r.finished:
+                finished.add(name)
+                log.info("✓ %s | ok=%d/%d err=%d/%d",
+                         name, r.complete, r.total, r.error, r.total)
 
-            # Check if configuration is complete
-            if (new_complete + new_error) == new_total:
-                finish_configs.add(config_name)
-                tqdm.write(
-                    f"✓ Finish: {config_name} | Success: {new_complete}/{new_total} | Errors: {new_error}/{new_total}")
+        if finished != set(arch_names):
+            time.sleep(interval)
 
-        if finish_configs != set(configs):
-            time.sleep(check_interval)
+    for tr in trackers.values():
+        tr["bar"].close()
 
-    # Close progress bars
-    for progress in progress_trackers.values():
-        progress["tracker"].close()
-
-    return list(finish_configs)
+    return list(finished)
 
 
-def calculate_performance_scores(finish_configs: list[str], base_dir: str, env: config.EnvironmentConfig):
-    """
-    Calculate performance scores for completed configurations.
+# ═══════════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════════
 
-    Args:
-        finish_configs: List of completed configuration names
-        base_dir: Base result directory where configurations are stored
+def main():
+    p = argparse.ArgumentParser(description="GEM5 simulation runner")
+    p.add_argument("config", help="YAML config path")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="Enable debug logging")
+    args = p.parse_args()
 
-    Returns:
-        List of paths to generated score files
-    """
-    
-    score_files = []
+    # Use TqdmHandler so log output doesn't corrupt progress bars
+    handler = TqdmHandler()
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    logging.root.addHandler(handler)
+    logging.root.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-    for config_name in finish_configs:
-        # Calculate performance score for completed configuration
-        config_path = os.path.join(base_dir, config_name)
-        score_file = f"{config_path}.score.txt"
-        version = "-17" if env.workload_version == "spec2017" else ""
+    cfg = Config.load(args.config)
+    log.debug("Loaded config: %s", cfg)
 
-        # Prepare score calculation command
-        score_cmd = [
-            f"export PYTHONPATH={env.gem5_data_proc_home}:$PYTHONPATH",
-            f"cd {env.gem5_data_proc_home}",
-            f"bash example-scripts/gem5-score-ci{version}.sh {config_path} {env.workload_root}/cluster-0-0.json > {score_file}"
-        ]
+    # 1) issue
+    issued = issue_archs(cfg)
+    if not issued:
+        log.error("No architectures were issued successfully")
+        sys.exit(1)
 
-        # Execute score calculation
-        os.system(" && ".join(score_cmd))
-        score_files.append(score_file)
+    # 2) monitor
+    finished = monitor_progress(cfg, issued)
 
-    return score_files
+    # 3) score
+    results = calculate_scores(cfg, finished)
+    for r in results:
+        log.info("\n%s", r.summary())
 
 
 if __name__ == "__main__":
-    # Process all configurations
-
-    argparse.ArgumentParser()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("config", type=str, help="Configuration File (yaml)")
-    args = parser.parse_args()
-
-    env, run, workload_list, arch_list, server_list = config.load_yaml(
-        args.config)
-
-    issued_arch = issue_archs(env=env,
-                              run=run,
-                              workload_list=workload_list,
-                              arch_list=arch_list,
-                              server_list=server_list)
-
-    # # Start monitoring and get completed configurations
-    finished_arch = monitor_run_progress(
-        issued_arch, run.output_base_dir, 10)
-
-    # Calculate performance scores for completed configurations
-    score_files = calculate_performance_scores(
-        finished_arch,
-        run.output_base_dir,
-        env)
+    main()

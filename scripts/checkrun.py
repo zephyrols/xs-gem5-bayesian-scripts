@@ -1,72 +1,156 @@
-# 检查指定文件夹下所有子文件夹的 stdout 文件是否有包含"because a thread reached the max instruction count"的行
+"""
+Checkpoint Run Status Checker
+==============================
+Scan simulation output directories and classify each checkpoint as
+complete / error / running.
 
+Usage:
+    python checkrun.py ./output/RunOutput/InstLens/spec06/some_arch
+    python checkrun.py ./output/RunOutput/InstLens/spec06/some_arch -v
+"""
+
+import logging
 import os
-import sys
 import re
-from tqdm import tqdm
 import argparse
+from enum import Enum, auto
+from dataclasses import dataclass, field
+from typing import List, Optional
 
-def check_run(path) -> tuple[int, int, int, int]:
+log = logging.getLogger(__name__)
+log.addHandler(logging.NullHandler())
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Patterns
+# ═══════════════════════════════════════════════════════════════
+
+_SUCCESS_PATTERNS = [
+    re.compile(r"because a thread reached the max instruction count"),
+    re.compile(r"because m5_exit instruction encountered when simulating XS"),
+]
+
+_ERROR_PATTERNS = [
+    re.compile(r"Program aborted at tick"),
+    re.compile(r"Failed to execute default signal handler!"),
+    re.compile(r"gem5 has encountered a segmentation fault!"),
+    re.compile(r"error: ambiguous option:"),
+    re.compile(r"AttributeError:"),
+]
+
+
+class Status(Enum):
+    COMPLETE = auto()
+    ERROR = auto()
+    RUNNING = auto()
+
+
+def _classify(path: str) -> Status:
+    """Classify a single checkpoint leaf directory."""
+    simout = os.path.join(path, "simout")
+    simerr = os.path.join(path, "simerr")
+
+    if not (os.path.isfile(simout) and os.path.isfile(simerr)):
+        return Status.ERROR
+
+    with open(simout) as f:
+        out_text = f.read()
+    with open(simerr) as f:
+        err_text = f.read()
+
+    if any(p.search(out_text) for p in _SUCCESS_PATTERNS):
+        return Status.COMPLETE
+
+    if any(p.search(err_text) for p in _ERROR_PATTERNS):
+        return Status.ERROR
+
+    return Status.RUNNING
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Result
+# ═══════════════════════════════════════════════════════════════
+
+@dataclass
+class CheckResult:
+    complete: int = 0
+    error: int = 0
+    total: int = 0
+    error_paths: List[str] = field(default_factory=list)
+    running_paths: List[str] = field(default_factory=list)
+
+    @property
+    def success_rate(self) -> float:
+        return (self.complete / self.total * 100) if self.total else 0.0
+
+    @property
+    def finished(self) -> bool:
+        return self.total > 0 and (self.complete + self.error) == self.total
+
+    def as_tuple(self):
+        """Backward-compatible (complete, error, total, error_paths)."""
+        return self.complete, self.error, self.total, self.error_paths
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Public API
+# ═══════════════════════════════════════════════════════════════
+
+def check_run(path: str) -> CheckResult:
     """
-    Check the running status of all checkpoints in the specified directory
+    Walk *path* and classify every leaf directory (no subdirectories)
+    as complete / error / running.
 
-    Args:
-        path (str): The path to the directory to check.
-    
     Returns:
-        tuple: A tuple containing the number of completed runs, the number of errors, the total number of runs, and a list of error paths.
+        CheckResult with counts and path lists.
     """
+    result = CheckResult()
 
-    complete  = 0
-    error = 0
-    total = 0
-    error_list = []
     for root, dirs, files in os.walk(path):
-        if len(dirs) == 0:
-            total += 1
-            if "simout" in files and "simerr" in files:
-                simout_path = os.path.join(root, "simout")
-                simerr_path = os.path.join(root, "simerr")
-                with open(simout_path, "r") as simout_file, open(simerr_path, "r") as simerr_file:
-                    simout = simout_file.read()
-                    simerr = simerr_file.read()
+        if dirs:                       # only leaf directories
+            continue
 
-                if any(re.search(pattern, simout) for pattern in [
-                                "because a thread reached the max instruction count",
-                                "because m5_exit instruction encountered when simulating XS"
-                            ]):
-                    complete += 1
-                    if __name__ == "__main__":
-                        print(f"Success done in {root}")
-                    pass
-                elif any(re.search(pattern, simerr) for pattern in [
-                            "Program aborted at tick",
-                            "Failed to execute default signal handler!",
-                            "gem5 has encountered a segmentation fault!",
-                            "error: ambiguous option:",
-                            "AttributeError:"
-                        ]):
-                    error_list.append(root)
-                    error += 1
-                else:
-                    if __name__ == "__main__":
-                        print(f"Unknown Error or Running in {root}")
-                    pass
-            else:
-                error_list.append(root)
-                error += 1
-    return complete, error, total, error_list
+        result.total += 1
+        status = _classify(root)
+
+        if status is Status.COMPLETE:
+            result.complete += 1
+            log.debug("complete: %s", root)
+        elif status is Status.ERROR:
+            result.error += 1
+            result.error_paths.append(root)
+            log.debug("error:    %s", root)
+        else:
+            result.running_paths.append(root)
+            log.debug("running:  %s", root)
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("dir", help="DIR for check running status.")
-
+    parser = argparse.ArgumentParser(description="Check gem5 simulation status")
+    parser.add_argument("dir", help="Directory to scan")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show per-directory status")
     args = parser.parse_args()
-    complete, error, total, error_list = check_run(args.dir)
 
-    for e in error_list:
-        print(f"Error Path: {e}")
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-    print(f"Complete: {complete}/{total}")
-    print(f"Error: {error}/{total}")
-    print(f"Success rate: {complete/total*100:.2f}%")
+    r = check_run(args.dir)
+
+    for p in r.error_paths:
+        log.warning("error: %s", p)
+    for p in r.running_paths:
+        log.info("running: %s", p)
+
+    log.info("Complete : %d/%d", r.complete, r.total)
+    log.info("Error    : %d/%d", r.error, r.total)
+    log.info("Success  : %.2f%%", r.success_rate)

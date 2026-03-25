@@ -1,161 +1,213 @@
-import paramiko
-from tqdm import tqdm
+"""
+Remote Server Management
+========================
+SSH-based job distribution, process monitoring, and cleanup.
+
+Usage as library:
+    from remote import RemoteNode
+    node = RemoteNode("node007.bosccluster.com")
+    node.try_run(cmd, exec_name="gem5.fast", max_procs=64)
+
+Usage as CLI:
+    python remote.py -e gem5.fast -s node007 node008 --check
+    python remote.py -e gem5.fast -s node007 node008 --kill
+    python remote.py -e gem5.fast -s node007 -c "sleep 100 &" --run -n 64
+"""
+
+import logging
 import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Optional
 
-def check_load_and_run(server: str|None, cmd:str, exec:str, max_run_in_server:int) -> bool:
-    if server is None:
-        server = "localhost"
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+import paramiko
 
+log = logging.getLogger(__name__)
+log.addHandler(logging.NullHandler())   # silent when imported as library
+
+
+def _silence_paramiko_logs() -> None:
+    """Disable Paramiko log output by default for both CLI and import usage."""
+    for name in ("paramiko", "paramiko.transport"):
+        logger = logging.getLogger(name)
+        logger.disabled = True
+        logger.propagate = False
+
+
+_silence_paramiko_logs()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  SSH helper
+# ═══════════════════════════════════════════════════════════════
+
+@contextmanager
+def _ssh(server: str):
+    """Context-managed SSH connection with auto-close."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(hostname=server)
     try:
-        ssh.connect(hostname=server)
-        # 执行任务数量
-        _, stdout, _ = ssh.exec_command(f"pgrep -c -f {exec} -u $(whoami)")
-        running_num = int(stdout.read().decode().strip())
+        yield client
+    finally:
+        client.close()
 
-        #检查负载
-        _, stdout, _ = ssh.exec_command("uptime")
-        load = float(stdout.read().decode().strip().split(" ")[-2].split(",")[0])
 
-        # 核心数量
-        _, stdout, _ = ssh.exec_command(f"nproc")
-        cores = int(stdout.read().decode().strip())
+def _ssh_read(client: paramiko.SSHClient, cmd: str) -> str:
+    """Run a command and return stripped stdout."""
+    _, stdout, _ = client.exec_command(cmd)
+    return stdout.read().decode().strip()
 
-        if running_num > max_run_in_server or load >= cores/2:
-            ssh.close()
+
+# ═══════════════════════════════════════════════════════════════
+#  Node status
+# ═══════════════════════════════════════════════════════════════
+
+@dataclass
+class NodeStatus:
+    server: str
+    running: int
+    cores: int
+    load_1m: float
+    load_5m: float
+    load_15m: float
+
+    @property
+    def load_threshold(self) -> float:
+        return self.cores / 2
+
+    @property
+    def can_accept(self) -> bool:
+        return self.load_1m < self.load_threshold
+
+    def summary(self) -> str:
+        if self.running == 0:
+            tag = "idle"
+        elif not self.can_accept:
+            tag = "HIGH LOAD"
+        else:
+            tag = "ok"
+        return (
+            f"{self.server:30s}  "
+            f"procs={self.running:3d}  "
+            f"load={self.load_1m:.1f}/{self.load_5m:.1f}/{self.load_15m:.1f}  "
+            f"cores={self.cores}  "
+            f"[{tag}]"
+        )
+
+
+def query_status(server: str, exec_name: str) -> NodeStatus:
+    """SSH into *server* and return a NodeStatus snapshot."""
+    with _ssh(server) as client:
+        running = int(_ssh_read(client, f"pgrep -c -f {exec_name} -u $(whoami)") or "0")
+        cores = int(_ssh_read(client, "nproc"))
+        uptime = _ssh_read(client, "uptime")
+        loads = uptime.split("load average: ")[1].split(", ")
+        l1, l5, l15 = float(loads[0]), float(loads[1]), float(loads[2])
+
+    return NodeStatus(server=server, running=running, cores=cores,
+                      load_1m=l1, load_5m=l5, load_15m=l15)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Core operations
+# ═══════════════════════════════════════════════════════════════
+
+def check_load_and_run(server: str, cmd: str, exec_name: str,
+                       max_procs: int) -> bool:
+    """
+    If *server* has capacity, fire *cmd* over SSH and return True.
+    Otherwise return False without running anything.
+
+    Backward-compatible API used by run.py.
+    """
+    try:
+        status = query_status(server, exec_name)
+        if status.running >= max_procs or not status.can_accept:
+            log.debug("skip %s: procs=%d load=%.1f",
+                      server, status.running, status.load_1m)
             return False
 
-        _, stdout, _ = ssh.exec_command(cmd)
-        ssh.close()
+        with _ssh(server) as client:
+            client.exec_command(cmd)
+
+        log.debug("dispatched to %s", server)
         return True
+
     except Exception as e:
-        tqdm.write(f"Connect to {server} failed, error: {e}")
+        log.warning("failed on %s: %s", server, e)
         return False
 
-def kill_all_run(server, exec):
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+def kill_all(server: str, exec_name: str) -> int:
+    """Kill all user-owned *exec_name* processes on *server*. Returns kill count."""
     try:
-        ssh.connect(hostname=server)
-        # Count the processes before killing them
-        _, stdout, _ = ssh.exec_command(f"pgrep -c -f {exec} -u $(whoami)")
-        totalCount = int(stdout.read().decode().strip())
-        # Kill the processes
-        _, stdout, _ = ssh.exec_command(f"pkill -c -f {exec} -u $(whoami)")
-        # Count the processes after killing them
-        killCount = int(stdout.read().decode().strip())
-        ssh.close()
+        with _ssh(server) as client:
+            before = int(_ssh_read(client, f"pgrep -c -f {exec_name} -u $(whoami)") or "0")
+            killed = int(_ssh_read(client, f"pkill -c -f {exec_name} -u $(whoami)") or "0")
+            remain = before - killed
 
-        print(f'On {server}, {killCount} Killed ,{totalCount-killCount} Remain')
+        log.info("%s: killed=%d remain=%d", server, killed, remain)
+        return killed
+
     except Exception as e:
-        tqdm.write(f"Connect to {server} failed, error: {e}")
+        log.warning("failed on %s: %s", server, e)
+        return 0
 
-def check_process_status(server: str, exec: str) -> None:
-    """检查服务器上指定进程的运行状态和系统负载"""
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    try:
-        ssh.connect(hostname=server)
-        
-        # 检查指定进程数量
-        _, stdout, _ = ssh.exec_command(f"pgrep -c -f {exec} -u $(whoami)")
-        running_processes = int(stdout.read().decode().strip())
-        
-        # 检查系统负载
-        _, stdout, _ = ssh.exec_command("uptime")
-        uptime_output = stdout.read().decode().strip()
-        load_avg = uptime_output.split("load average: ")[1].split(", ")
-        load_1min, load_5min, load_15min = [float(load) for load in load_avg]
-        
-        # 检查CPU核心数
-        _, stdout, _ = ssh.exec_command("nproc")
-        cores = int(stdout.read().decode().strip())
-        
-        ssh.close()
-        
-        print(f"\n=== Server: {server} ===")
-        print(f"Running '{exec}' processes: {running_processes}")
-        print(f"CPU cores: {cores}")
-        print(f"Load average: 1min={load_1min:.2f}, 5min={load_5min:.2f}, 15min={load_15min:.2f}")
-        print(f"Load threshold (cores/2): {cores/2:.1f}")
-        
-        # 状态评估
-        if running_processes == 0:
-            status = "🟢 No processes running"
-        elif load_1min >= cores/2:
-            status = "🔴 High load - may not accept new tasks"
-        else:
-            status = "🟡 Running - can accept more tasks"
-        
-        print(f"Status: {status}")
-        
-    except Exception as e:
-        print(f"❌ Connect to {server} failed, error: {e}")
+# ═══════════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════════
+
+def main():
+    p = argparse.ArgumentParser(description="Remote server management")
+    p.add_argument("-e", "--exec", required=True, dest="exec_name",
+                   help="Process name to match (e.g. gem5.fast)")
+    p.add_argument("-s", "--server", nargs="+", default=["localhost"],
+                   help="Server hostnames")
+
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--check", action="store_true",
+                       help="Show process status and load")
+    group.add_argument("--kill", action="store_true",
+                       help="Kill all matching processes")
+    group.add_argument("--run", action="store_true",
+                       help="Distribute a command")
+
+    p.add_argument("-c", "--cmd", nargs="+", default=[""],
+                   help="Command to run (with --run)")
+    p.add_argument("-n", "--num", type=int, default=64,
+                   help="Max processes per server (with --run)")
+    p.add_argument("-v", "--verbose", action="store_true")
+
+    args = p.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    if args.check:
+        for server in args.server:
+            try:
+                s = query_status(server, args.exec_name)
+                log.info(s.summary())
+            except Exception as e:
+                log.error("%s: %s", server, e)
+
+    elif args.kill:
+        for server in args.server:
+            kill_all(server, args.exec_name)
+
+    elif args.run:
+        cmd_str = " ".join(args.cmd)
+        log.info("cmd: %s", cmd_str)
+        for server in args.server:
+            ok = check_load_and_run(server, cmd_str, args.exec_name, args.num)
+            if ok:
+                log.info("dispatched to %s", server)
 
 
 if __name__ == "__main__":
-    # 获取参数
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-l", "--list",
-                        action="store_true",
-                        default=False,
-                        help="show server name")
-    parser.add_argument("-k", "--kill", 
-                        action="store_true", 
-                        default=False,
-                        help="kill all run exec")
-    parser.add_argument("--check",
-                        action="store_true",
-                        default=False,
-                        help="check process status and system load on servers")
-    parser.add_argument("-r", "--run",
-                        action="store_true",
-                        default=False,
-                        help="run")
-    parser.add_argument("-n", "--num",
-                        type=int,
-                        action="store",
-                        default=1,
-                        help="max run in per server")
-    parser.add_argument("-s", "--server",
-                        nargs="+",
-                        help="server name or ip address",
-                        default=["localhost"])
-    parser.add_argument("-c", "--cmd",
-                        nargs="+",
-                        default=[""],
-                        help="command to run")
-    parser.add_argument("-e", "--exec",
-                        required=True,
-                        help="exec name")
-    args = parser.parse_args()
-
-    if args.list:
-        print(args.server)
-    
-    if args.kill:
-        print("Kill all run exec: ", args.exec)
-        print("Using Server: ", args.server)
-        for server in args.server:
-            kill_all_run(server, args.exec)
-    
-    if args.check:
-        print("Checking process status and system load...")
-        print("Checking exec: ", args.exec)
-        print("Using Server: ", args.server)
-        for server in args.server:
-            check_process_status(server, args.exec)
-    
-    if args.run:
-        cmd_str = " ".join(args.cmd)
-        print("Run exec: ", args.exec)
-        print("Run command: ", cmd_str)
-        print("Max run in per server: ", args.num)
-        print("Using Server: ", args.server)
-        for server in args.server:
-            check_load_and_run(server, cmd_str, args.exec, args.num)
-    
-
+    main()
