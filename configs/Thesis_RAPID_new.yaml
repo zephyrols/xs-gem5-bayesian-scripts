@@ -1,0 +1,312 @@
+# ── GEM5 Simulation Config ───────────────────────────────────
+
+# 换 gem5 版本 / 仿真器时只改这里
+gem5:
+  home: /nfs/home/qiuzeyuan/repos/GEM5
+  bin_home: /nfs/home/qiuzeyuan/repos/GEM5/test/optimize/bin
+  # binary: gem5.Thesis.InstLens.909d12.fast
+  # binary: gem5.Thesis.InstLens.a23cbce.fast
+  # binary: gem5.Thesis.InstLens.260323.e7ef07.fast
+  # binary: gem5.Thesis.InstLens.260325.8473d4.fast
+  binary: gem5.Thesis.InstLens.260326.c1bff3.fast
+
+env:
+  - name: GCB_RESTORER
+    value: ""
+  - name: GCBV_REF_SO
+    value: sources/riscv64-nemu-notama-tvalref-so
+  - name: GEM5_DATA_PROC
+    value: third_party/gem5_data_proc
+
+# 调运行策略时只改这里
+run:
+  output_dir: output/RAPID/mySpec06-full
+  resume: true
+  checkpoint_weight: 0.8    # simpoint 累计权重阈值
+
+# 扩缩容 / 换集群环境时只改这里
+cluster:
+  max_procs_per_node: 64
+  shell_init:         # 每个远程 job 前执行的初始化命令
+    - source ~/miniconda3/etc/profile.d/conda.sh
+    - conda activate gem5py38
+    - export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+  servers:
+    - node007.bosccluster.com
+    - node008.bosccluster.com
+    - node009.bosccluster.com
+    - node020.bosccluster.com
+    - node021.bosccluster.com
+    - node022.bosccluster.com
+    - node023.bosccluster.com
+    - node024.bosccluster.com
+    - node025.bosccluster.com
+    - node026.bosccluster.com
+    - node027.bosccluster.com
+    - node028.bosccluster.com
+    - node029.bosccluster.com
+    - node033.bosccluster.com
+    - node034.bosccluster.com
+    - node035.bosccluster.com
+    - node036.bosccluster.com
+    - node037.bosccluster.com
+    - node038.bosccluster.com
+    - node039.bosccluster.com
+    - node040.bosccluster.com
+
+# 换 benchmark suite 时只改这里
+workloads:
+  preset: spec2006
+  # only: [namd]
+  # exclude: [sphinx3]
+
+# 改微架构参数时只改这里
+archs:
+  defaults:
+    script: configs/example/xiangshan.py
+  configs:
+    # ========== L2配置 ==========
+    - name: L2/none
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --no-pf
+    # ========== 单一预取器 ==========
+    - name: L2/bop
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-bop
+    - name: L2/adjacent
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-tencent-prefetcher
+    - name: L2/cdp
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-cdp
+    # ========== 2-组合 ==========
+    - name: L2/bop_adjacent
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-bop
+        - --l2-enable-tencent-prefetcher
+    - name: L2/bop_cdp
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-bop
+        - --l2-enable-cdp
+    - name: L2/adjacent_cdp
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-tencent-prefetcher
+        - --l2-enable-cdp
+    # ========== 3-组合 ==========
+    - name: L2/bop_adjacent_cdp
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l2_dump_prefetch_request_trace
+        - --l2-enable-bop
+        - --l2-enable-tencent-prefetcher
+        - --l2-enable-cdp
+
+
+
+
+    # ========== L1配置 ==========
+    - name: L1/none
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --no-pf
+    # ========== 单一预取器 ==========
+    - name: L1/stream
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-stream
+    - name: L1/stride
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-stride
+    - name: L1/cplx
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-cplx
+    # ========== 2-组合 (6种) ==========
+    - name: L1/stream_stride
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-stream
+        - --l1d-enable-stride
+    - name: L1/stream_cplx
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-stream
+        - --l1d-enable-cplx
+    - name: L1/stride_cplx
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-stride
+        - --l1d-enable-cplx
+    # ========== 3-组合 ==========
+    - name: L1/stream_stride_cplx
+      script_file: configs/example/xiangshan.py
+      params:
+        - --bp-type=DecoupledBPUWithBTB
+        - --kmh-align
+        - --l1d_dump_prefetch_request_trace
+        - --l1d-enable-stream
+        - --l1d-enable-stride
+        - --l1d-enable-cplx
+
+    
+
+
+# ── Workload Presets ─────────────────────────────────────────
+
+presets:
+  spec2006:
+    # path: /nfs/home/share/jiaxiaoyu/simpoint_checkpoint_zstd_format/spec06_rv64gcb_O3_20m_gcc12.2.0-intFpcOff-jeMalloc
+    path: /nfs/home/qiuzeyuan/repos/build_spec06/archive/spec06_gcc12.2.0_rv64gcb_base_intFppOff_jemalloc_O3_lto_lp64d_g/checkpoint-0-0-0
+    list:
+      - perlbench_checkspam
+      - perlbench_diffmail
+      - perlbench_splitmail
+      - bzip2_chicken
+      - bzip2_combined
+      - bzip2_html
+      - bzip2_liberty
+      - bzip2_program
+      - bzip2_source
+      - gcc_166
+      - gcc_200
+      - gcc_cpdecl
+      - gcc_expr
+      - gcc_expr2
+      - gcc_g23
+      - gcc_s04
+      - gcc_scilab
+      - gcc_typeck
+      - mcf
+      - gobmk_13x13
+      - gobmk_nngs
+      - gobmk_score2
+      - gobmk_trevorc
+      - gobmk_trevord
+      - hmmer_nph3
+      - hmmer_retro
+      - sjeng
+      - libquantum
+      - h264ref_foreman.baseline
+      - h264ref_foreman.main
+      - h264ref_sss
+      - omnetpp
+      - astar_biglakes
+      - astar_rivers
+      - xalancbmk
+      - bwaves
+      - gamess_cytosine
+      - gamess_gradient
+      - gamess_triazolium
+      - milc
+      - zeusmp
+      - gromacs
+      - cactusADM
+      - leslie3d
+      - namd
+      - dealII
+      - soplex_pds-50
+      - soplex_ref
+      - povray
+      - calculix
+      - GemsFDTD
+      - tonto
+      - lbm
+      - wrf
+      - sphinx3
+
+  spec2017:
+    path: /nfs/home/yanyue/spec17_cpts/checkpoint-0-0-0
+    list:
+      - perlbench_spam
+      - perlbench_diff
+      - perlbench_split
+      - gcc_pp_O2
+      - gcc_pp_O3
+      - gcc_ref32_O3
+      - gcc_ref32_O5
+      - gcc_small_O3
+      - mcf
+      - omnetpp
+      - xalancbmk
+      - x264_pass1
+      - x264_pass2
+      - x264_seek
+      - deepsjeng
+      - leela
+      - exchange2
+      - xz_cld
+      - xz_combined
+      - xz_cpu2006
+      - bwaves_1
+      - bwaves_2
+      - bwaves_3
+      - bwaves_4
+      - cactuBSSN
+      - lbm
+      - wrf
+      - blender
+      - cam4
+      - imagick
+      - nab
+      - fotonik3d
+      - roms
+      - povray
+      - namd
+      - parest
+
+# ── Optimization (optional) ─────────────────────────────────
+optimization:
+  constants: [--some-fixed-flag]
+  space:
+    - { name: l1d_size,   type: pow2,   range: [4, 8] }
+    - { name: l2_assoc,   type: int,    range: [4, 16] }
+    - { name: prefetcher, type: choice, values: [none, stride, bop] }
+    - { name: use_victim, type: bool }
