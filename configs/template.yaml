@@ -1,9 +1,9 @@
 # ── GEM5 Simulation Config ───────────────────────────────────
 
 gem5:
-  home: /path/to/gem5
-  bin_home: /path/to/gem5/build/Arch
-  binary: gem5.fast
+  home: /path/to/gem5 # gem5 home directory
+  bin_home: /path/to/gem5/build/Arch # gem5 binaries directory (e.g., build/X86, build/RISCV, or a custom build)
+  binary: gem5.fast # gem5 binary to use (e.g., gem5.opt, gem5.debug, or a custom build)
   restorer:
     type: GCB_RESTORER
     path: sources/coremark-riscv64-xs.bin
@@ -11,13 +11,18 @@ gem5:
     type: GCBV_REF_SO
     path: sources/riscv64-nemu-notama-tvalref-so
 
+env:
+  - name: GCB_RESTORER
+    value: ""
+  - name: GCBV_REF_SO
+    value: sources/riscv64-nemu-notama-tvalref-so
+  - name: GEM5_DATA_PROC
+    value: third_party/gem5_data_proc
+
 run:
   output_dir: ./output/example-run  # output directory for this run
   resume: true
   checkpoint_weight: 0.8    # simpoint cumulative weight threshold
-
-scoring:
-  data_proc_home: third_party/gem5_data_proc
 
 cluster:
   max_procs_per_node: 64  # max concurrent processes per server

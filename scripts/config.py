@@ -5,7 +5,7 @@ Usage:
     cfg = Config.load("config.yaml")
     cfg.gem5.home
     cfg.gem5.bin_path          # derived: home/test/optimize/bin/{binary}
-    cfg.gem5.data_proc_home    # derived: home/test/gem5_data_proc
+    cfg.env                    # env vars (e.g. GEM5_DATA_PROC)
     cfg.workloads[0].checkpoints
     cfg.archs[0].script_path   # derived: home/{script}
     cfg.cluster.servers
@@ -24,17 +24,10 @@ from pydantic import BaseModel, Field, computed_field
 #  Models
 # ═══════════════════════════════════════════════════════════════
 
-class TypedPath(BaseModel):
-    type: str
-    path: str = ""
-
-
 class Gem5(BaseModel):
     home: str
     bin_home: str
     binary: str
-    restorer: TypedPath
-    ref_so: TypedPath
 
     @computed_field
     @property
@@ -42,8 +35,9 @@ class Gem5(BaseModel):
         return os.path.join(self.bin_home, self.binary)
 
 
-class Scoring(BaseModel):
-    data_proc_home: str
+class EnvVar(BaseModel):
+    name: str
+    value: str = ""
 
 
 class Run(BaseModel):
@@ -137,7 +131,7 @@ def _discover_checkpoints(root: str, name: str, weight: float) -> List[str]:
 class Config(BaseModel):
     gem5: Gem5
     run: Run
-    scoring: Scoring
+    env: List[EnvVar] = Field(default_factory=list)
     cluster: Cluster
     workloads: List[Workload]
     archs: List[Arch]
@@ -147,16 +141,39 @@ class Config(BaseModel):
 
     @classmethod
     def load(cls, path: str) -> "Config":
-        with open(path) as f:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        def _resolve_path(value: str) -> str:
+            if not value:
+                return ""
+            if os.path.isabs(value):
+                return os.path.normpath(value)
+            return os.path.normpath(os.path.join(repo_root, value))
+
+        config_path = _resolve_path(path)
+
+        with open(config_path) as f:
             raw = yaml.safe_load(f)
 
+        # ── env (preferred) ──────────────────────────────────
+        env_entries: List[EnvVar] = []
+        env_map: Dict[str, str] = {}
+        for item in raw.get("env", []):
+            if not isinstance(item, dict) or "name" not in item:
+                continue
+            name = str(item["name"])
+            value = _resolve_path(str(item.get("value", "")))
+            env_entries.append(EnvVar(name=name, value=value))
+            env_map[name] = value
+
         # ── gem5 ─────────────────────────────────────────────
-        gem5 = Gem5(**raw["gem5"])
+        gem5_raw = dict(raw["gem5"])
+        gem5 = Gem5(**gem5_raw)
 
         # ── run ──────────────────────────────────────────────
         run_raw = raw["run"]
         run = Run(
-            output_dir=os.path.abspath(run_raw["output_dir"]),
+            output_dir=_resolve_path(run_raw["output_dir"]),
             resume=run_raw.get("resume", True),
             checkpoint_weight=run_raw.get("checkpoint_weight", 1.0),
         )
@@ -164,8 +181,8 @@ class Config(BaseModel):
         # ── cluster ──────────────────────────────────────────
         cluster = Cluster(**raw.get("cluster", {}))
 
-        # ── scoring ──────────────────────────────────────────
-        scoring = Scoring(**raw["scoring"])
+        if not env_map.get("GEM5_DATA_PROC", ""):
+            raise ValueError("Missing GEM5 data processor path. Set env: GEM5_DATA_PROC")
 
         # ── workloads ────────────────────────────────────────
         wl_cfg = raw["workloads"]
@@ -177,6 +194,7 @@ class Config(BaseModel):
             raise ValueError(f"Preset '{preset_key}' not found. Available: {available}")
 
         preset = presets[preset_key]
+        preset_path = _resolve_path(preset["path"])
         names: List[str] = list(preset["list"])
 
         if only := wl_cfg.get("only"):
@@ -190,7 +208,7 @@ class Config(BaseModel):
             Workload(
                 name=n,
                 checkpoints=_discover_checkpoints(
-                    preset["path"], n, run.checkpoint_weight,
+                    preset_path, n, run.checkpoint_weight,
                 ),
             )
             for n in names
@@ -215,9 +233,9 @@ class Config(BaseModel):
         opt = Optimization(**raw["optimization"]) if "optimization" in raw else None
 
         return cls(
-            gem5=gem5, run=run, scoring=scoring, cluster=cluster,
+            gem5=gem5, run=run, env=env_entries, cluster=cluster,
             workloads=workloads, archs=archs,
-            preset_name=preset_key, preset_path=preset["path"],
+            preset_name=preset_key, preset_path=preset_path,
             optimization=opt,
         )
 
@@ -235,16 +253,16 @@ class Config(BaseModel):
         lines.append(f"  home           : {self.gem5.home}")
         lines.append(f"  bin_home       : {self.gem5.bin_home}")
         lines.append(f"  binary         : {self.gem5.bin_path}")
-        lines.append(f"  restorer       : {self.gem5.restorer.type}  {self.gem5.restorer.path or '(embedded)'}")
-        lines.append(f"  ref_so         : {self.gem5.ref_so.type}  {self.gem5.ref_so.path}")
 
         h("Run")
         lines.append(f"  output_dir        : {self.run.output_dir}")
         lines.append(f"  resume            : {self.run.resume}")
         lines.append(f"  checkpoint_weight : {self.run.checkpoint_weight}")
 
-        h("Scoring")
-        lines.append(f"  data_proc_home : {self.scoring.data_proc_home}")
+        if self.env:
+            h("Env")
+            for item in self.env:
+                lines.append(f"  {item.name}={item.value}")
 
         h(f"Cluster ({len(self.cluster.servers)} nodes, capacity {self.cluster.total_capacity})")
         lines.append(f"  max_procs_per_node : {self.cluster.max_procs_per_node}")

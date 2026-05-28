@@ -56,6 +56,8 @@ def run_cmd(cfg: Config, workload: Workload, arch: Arch):
     servers = cfg.cluster.servers
     max_procs = cfg.cluster.max_procs_per_node
 
+    env_vars = {item.name: item.value for item in cfg.env}
+
     for cpt in tqdm(workload.checkpoints,
                     desc=f"Issuing {workload.name}", leave=False,
                     unit="cpt", dynamic_ncols=True):
@@ -76,10 +78,9 @@ def run_cmd(cfg: Config, workload: Workload, arch: Arch):
             continue
 
         # ── build remote command ─────────────────────────────
-        env_setup = list(cfg.cluster.shell_init) + [
-            f"export {gem5.restorer.type}={gem5.restorer.path}",
-            f"export {gem5.ref_so.type}={gem5.ref_so.path}",
-        ]
+        env_setup = list(cfg.cluster.shell_init)
+        for name, value in env_vars.items():
+            env_setup.append(f"export {name}={value}")
 
         dir_setup = [
             f"mkdir -p {cpt_output_dir}",
@@ -143,7 +144,7 @@ def issue_archs(cfg: Config) -> List[str]:
 # ═══════════════════════════════════════════════════════════════
 
 def monitor_progress(cfg: Config, arch_names: List[str],
-                     interval: int = 10) -> List[str]:
+                     interval: int = 2) -> List[str]:
     """
     Poll checkpoint completion for each arch until all are done.
     Returns list of finished arch names.

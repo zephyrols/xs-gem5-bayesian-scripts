@@ -18,7 +18,7 @@ import sys
 import argparse
 from pathlib import Path
 
-from config import Config, Gem5
+from config import Config
 
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
@@ -28,13 +28,12 @@ log.addHandler(logging.NullHandler())
 #  Helpers
 # ═══════════════════════════════════════════════════════════════
 
-def _make_env(gem5: Gem5) -> dict:
-    """Build a subprocess-safe env dict with restorer/ref_so vars injected."""
+def _make_env(cfg: Config) -> dict:
+    """Build a subprocess-safe env dict with config-defined vars injected."""
     env = os.environ.copy()
-    if gem5.restorer.type:
-        env[gem5.restorer.type] = gem5.restorer.path
-    if gem5.ref_so.type:
-        env[gem5.ref_so.type] = gem5.ref_so.path
+
+    for item in cfg.env:
+        env[item.name] = item.value
     return {k: str(v) if v is not None else "" for k, v in env.items()}
 
 
@@ -70,7 +69,7 @@ def build_gem5(cfg: Config, *, debug: bool = False, jobs: int | None = None):
     """
     gem5_home = Path(cfg.gem5.home)
     jobs = jobs or os.cpu_count() or 4
-    env = _make_env(cfg.gem5)
+    env = _make_env(cfg)
 
     # ── choose build command & source binary ─────────────────
     if debug:

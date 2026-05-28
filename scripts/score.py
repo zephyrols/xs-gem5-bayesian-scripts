@@ -138,7 +138,10 @@ def calculate_scores(cfg: Config, arch_names: List[str]) -> List[ScoreResult]:
     Compute SPEC scores for each arch in *arch_names*.
     Returns list of ScoreResult with parsed scores.
     """
-    data_proc = cfg.scoring.data_proc_home
+    env_map = {item.name: item.value for item in cfg.env}
+    data_proc = env_map.get("GEM5_DATA_PROC", "")
+    if not data_proc:
+        raise ValueError("Missing GEM5_DATA_PROC in config env")
     version_flag = "-17" if "2017" in cfg.preset_name else ""
     cluster_json = os.path.join(cfg.preset_path, "cluster-0-0.json")
 
