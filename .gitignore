@@ -1,4 +1,9 @@
 output
 __pycache__
+configs
 bin/*
 data_analysis/*
+tmp
+
+
+counter
